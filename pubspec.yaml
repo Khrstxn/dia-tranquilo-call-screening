@@ -1,0 +1,18 @@
+name: dia_tranquilo_call_screening
+description: Plugin Android de triagem e bloqueio de chamadas do Dia Tranquilo
+version: 0.0.1
+publish_to: "none"
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.diatranquilo.callscreening
+        pluginClass: DiaTranquiloCallScreeningPlugin
