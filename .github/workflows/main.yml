@@ -1,0 +1,56 @@
+name: Validate Flutter Android Plugin
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Flutter and Android validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show tool versions
+        run: |
+          flutter --version
+          dart --version
+          java -version
+
+      - name: Get plugin dependencies
+        run: flutter pub get
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
+      - name: Create Android validation app
+        run: |
+          cd "$RUNNER_TEMP"
+          flutter create --platforms=android dia_tranquilo_validation
+          cd dia_tranquilo_validation
+          flutter pub add dia_tranquilo_call_screening --path "$GITHUB_WORKSPACE"
+
+      - name: Build Android with plugin
+        run: |
+          cd "$RUNNER_TEMP/dia_tranquilo_validation"
+          flutter build apk --debug
