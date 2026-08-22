@@ -48,6 +48,24 @@ jobs:
           cd "$RUNNER_TEMP"
           flutter create --platforms=android dia_tranquilo_validation
           cd dia_tranquilo_validation
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle.kts")
+          text = path.read_text()
+
+          old = "minSdk = flutter.minSdkVersion"
+          new = "minSdk = 29"
+
+          if old not in text:
+              raise SystemExit(
+                  "Nao foi encontrada a configuracao esperada de minSdk."
+              )
+
+          path.write_text(text.replace(old, new))
+          PY
+
           flutter pub add dia_tranquilo_call_screening --path "$GITHUB_WORKSPACE"
 
       - name: Build Android with plugin
