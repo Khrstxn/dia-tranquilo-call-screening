@@ -25,6 +25,18 @@ class DiaTranquiloCallScreening {
     return resultado ?? false;
   }
 
+ static Future<bool> configurarBloqueioDesconhecidos({
+  required bool ativo,
+}) async {
+  final resultado = await _channel.invokeMethod<bool>(
+    'configurarBloqueioDesconhecidos',
+    {
+      'ativo': ativo,
+    },
+  );
+
+  return resultado ?? false;
+}
   static Future<bool> configurarBloqueioPorHorario({
     required bool ativo,
     required int inicioMinutos,
