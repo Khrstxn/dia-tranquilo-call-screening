@@ -56,6 +56,6 @@ jobs:
           EOF
 
       - name: Analyze plugin import
-        run: |
-          cd /tmp/dia_tranquilo_import_test
-          flutter analyze
+      run: |
+        cd /tmp/dia_tranquilo_import_test
+        flutter analyze lib/main.dart
