@@ -83,6 +83,13 @@ class DiaTranquiloCallScreeningPlugin :
                 solicitarAutorizacao(result)
             }
 
+            "configurarBloqueioDesconhecidos" -> {
+                configurarBloqueioDesconhecidos(
+                call = call,
+                result = result,
+                    )
+            }
+            
             "configurarBloqueioPorHorario" -> {
                 configurarBloqueioPorHorario(
                     call = call,
@@ -193,8 +200,48 @@ class DiaTranquiloCallScreeningPlugin :
             )
         }
     }
+    
+    private fun configurarBloqueioDesconhecidos(
+    call: MethodCall,
+    result: MethodChannel.Result,
+) {
+    val context = applicationContext
 
-    private fun configurarBloqueioPorHorario(
+    if (context == null) {
+        result.error(
+            "NO_CONTEXT",
+            "O contexto Android não está disponível.",
+            null,
+        )
+        return
+    }
+
+    val ativo = call.argument<Boolean>("ativo")
+
+    if (ativo == null) {
+        result.error(
+            "INVALID_ARGUMENTS",
+            "ativo é obrigatório.",
+            null,
+        )
+        return
+    }
+
+    val prefs = context.getSharedPreferences(
+        DiaTranquiloCallScreeningService.PREFS_NAME,
+        Context.MODE_PRIVATE,
+    )
+
+    val salvo = prefs.edit()
+        .putBoolean(
+            DiaTranquiloCallScreeningService.KEY_BLOQUEIO_DESCONHECIDOS_ATIVO,
+            ativo,
+        )
+        .commit()
+
+    result.success(salvo)
+}
+        private fun configurarBloqueioPorHorario(
         call: MethodCall,
         result: MethodChannel.Result,
     ) {
