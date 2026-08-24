@@ -8,7 +8,7 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
 
     companion object {
         const val PREFS_NAME = "dia_tranquilo_call_screening"
-
+        const val KEY_BLOQUEIO_DESCONHECIDOS_ATIVO = "bloqueioDesconhecidosAtivo"
         const val KEY_BLOQUEIO_HORARIO_ATIVO = "bloqueioHorarioAtivo"
         const val KEY_INICIO_MINUTOS = "inicioBloqueioMinutos"
         const val KEY_TERMINO_MINUTOS = "terminoBloqueioMinutos"
@@ -21,7 +21,8 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
 
         try {
             val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-
+            val bloqueioDesconhecidosAtivo =
+                prefs.getBoolean(KEY_BLOQUEIO_DESCONHECIDOS_ATIVO, false)
             val bloqueioAtivo =
                 prefs.getBoolean(KEY_BLOQUEIO_HORARIO_ATIVO, false)
 
@@ -31,11 +32,13 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
             val terminoMinutos =
                 prefs.getInt(KEY_TERMINO_MINUTOS, -1)
 
-            val deveBloquear = deveBloquearAgora(
-                bloqueioAtivo = bloqueioAtivo,
-                inicioMinutos = inicioMinutos,
-                terminoMinutos = terminoMinutos,
-            )
+            val deveBloquear =
+    bloqueioDesconhecidosAtivo ||
+    deveBloquearAgora(
+        bloqueioAtivo = bloqueioAtivo,
+        inicioMinutos = inicioMinutos,
+        terminoMinutos = terminoMinutos,
+    )
 
             responderChamada(
                 callDetails = callDetails,
