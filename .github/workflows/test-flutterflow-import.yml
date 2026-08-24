@@ -1,0 +1,61 @@
+name: Test FlutterFlow Plugin Import
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-import:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      - name: Create temporary Flutter app
+        run: |
+          mkdir -p /tmp/dia_tranquilo_import_test
+          cd /tmp/dia_tranquilo_import_test
+          flutter create --platforms=android --project-name dia_tranquilo_import_test .
+
+      - name: Add Dia Tranquilo plugin from GitHub
+        run: |
+          cd /tmp/dia_tranquilo_import_test
+          sed -i '/^dependencies:/a\
+            dia_tranquilo_call_screening:\
+              git:\
+                url: https://github.com/Khrstxn/dia-tranquilo-call-screening.git\
+                ref: main' pubspec.yaml
+          cat pubspec.yaml
+
+      - name: Resolve dependencies
+        run: |
+          cd /tmp/dia_tranquilo_import_test
+          flutter pub get
+
+      - name: Create import test
+        run: |
+          cd /tmp/dia_tranquilo_import_test
+          cat > lib/main.dart <<'EOF'
+          import 'package:dia_tranquilo_call_screening/dia_tranquilo_call_screening.dart';
+
+          Future<void> main() async {
+            await DiaTranquiloCallScreening.configurarBloqueioDesconhecidos(
+              ativo: true,
+            );
+          }
+          EOF
+
+      - name: Analyze plugin import
+        run: |
+          cd /tmp/dia_tranquilo_import_test
+          flutter analyze
