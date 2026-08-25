@@ -6,24 +6,40 @@ import android.net.Uri
 import android.provider.ContactsContract
 import android.telecom.Call
 import android.telecom.CallScreeningService
+import android.util.Log
 import java.time.LocalTime
 
 class DiaTranquiloCallScreeningService : CallScreeningService() {
 
     companion object {
+        private const val TAG = "DiaTranquiloScreening"
+
         const val PREFS_NAME = "dia_tranquilo_call_screening"
+
         const val KEY_BLOQUEIO_DESCONHECIDOS_ATIVO =
             "bloqueioDesconhecidosAtivo"
+
         const val KEY_BLOQUEIO_HORARIO_ATIVO =
             "bloqueioHorarioAtivo"
+
         const val KEY_INICIO_MINUTOS =
             "inicioBloqueioMinutos"
+
         const val KEY_TERMINO_MINUTOS =
             "terminoBloqueioMinutos"
     }
 
     override fun onScreenCall(callDetails: Call.Details) {
+        Log.d(
+            TAG,
+            "onScreenCall chamado. direction=${callDetails.callDirection}",
+        )
+
         if (callDetails.callDirection != Call.Details.DIRECTION_INCOMING) {
+            Log.d(
+                TAG,
+                "Chamada ignorada: não é chamada recebida.",
+            )
             return
         }
 
@@ -57,6 +73,15 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
                     -1,
                 )
 
+            Log.d(
+                TAG,
+                "Configuracao: " +
+                    "desconhecidos=$bloqueioDesconhecidosAtivo, " +
+                    "horario=$bloqueioHorarioAtivo, " +
+                    "inicio=$inicioMinutos, " +
+                    "termino=$terminoMinutos",
+            )
+
             val dentroDoHorarioBloqueado =
                 deveBloquearAgora(
                     bloqueioAtivo = bloqueioHorarioAtivo,
@@ -64,20 +89,41 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
                     terminoMinutos = terminoMinutos,
                 )
 
+            val estaNosContatos =
+                numeroEstaNosContatos(callDetails)
+
+            Log.d(
+                TAG,
+                "Analise: " +
+                    "dentroDoHorario=$dentroDoHorarioBloqueado, " +
+                    "estaNosContatos=$estaNosContatos",
+            )
+
             val deveBloquear =
                 if (dentroDoHorarioBloqueado) {
                     true
                 } else if (bloqueioDesconhecidosAtivo) {
-                    !numeroEstaNosContatos(callDetails)
+                    !estaNosContatos
                 } else {
                     false
                 }
+
+            Log.d(
+                TAG,
+                "Decisao final: bloquear=$deveBloquear",
+            )
 
             responderChamada(
                 callDetails = callDetails,
                 bloquear = deveBloquear,
             )
-        } catch (_: Exception) {
+        } catch (exception: Exception) {
+            Log.e(
+                TAG,
+                "Erro durante onScreenCall",
+                exception,
+            )
+
             responderChamada(
                 callDetails = callDetails,
                 bloquear = false,
@@ -88,39 +134,77 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
     private fun numeroEstaNosContatos(
         callDetails: Call.Details,
     ): Boolean {
-        if (
+        val permissaoContatos =
             checkSelfPermission(
                 Manifest.permission.READ_CONTACTS,
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+            ) == PackageManager.PERMISSION_GRANTED
+
+        Log.d(
+            TAG,
+            "READ_CONTACTS concedida=$permissaoContatos",
+        )
+
+        if (!permissaoContatos) {
             return false
         }
 
-        val handle = callDetails.handle ?: return false
+        val handle = callDetails.handle
+
+        if (handle == null) {
+            Log.d(
+                TAG,
+                "Chamada sem handle.",
+            )
+            return false
+        }
 
         if (handle.scheme != "tel") {
+            Log.d(
+                TAG,
+                "Handle nao e tel: ${handle.scheme}",
+            )
             return false
         }
 
         val numero = handle.schemeSpecificPart
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: return false
+
+        if (numero == null) {
+            Log.d(
+                TAG,
+                "Numero ausente ou vazio.",
+            )
+            return false
+        }
+
+        Log.d(
+            TAG,
+            "Consultando contatos para numero=$numero",
+        )
 
         val lookupUri = Uri.withAppendedPath(
             ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
             Uri.encode(numero),
         )
 
-        return contentResolver.query(
-            lookupUri,
-            arrayOf(ContactsContract.PhoneLookup._ID),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            cursor.moveToFirst()
-        } ?: false
+        val encontrado =
+            contentResolver.query(
+                lookupUri,
+                arrayOf(ContactsContract.PhoneLookup._ID),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                cursor.moveToFirst()
+            } ?: false
+
+        Log.d(
+            TAG,
+            "Numero encontrado nos contatos=$encontrado",
+        )
+
+        return encontrado
     }
 
     private fun deveBloquearAgora(
@@ -129,6 +213,10 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
         terminoMinutos: Int,
     ): Boolean {
         if (!bloqueioAtivo) {
+            Log.d(
+                TAG,
+                "Bloqueio por horario esta desligado.",
+            )
             return false
         }
 
@@ -136,30 +224,55 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
             inicioMinutos !in 0..1439 ||
             terminoMinutos !in 0..1439
         ) {
+            Log.d(
+                TAG,
+                "Horario invalido: inicio=$inicioMinutos termino=$terminoMinutos",
+            )
             return false
         }
 
         if (inicioMinutos == terminoMinutos) {
+            Log.d(
+                TAG,
+                "Inicio e termino iguais; bloqueio por horario ignorado.",
+            )
             return false
         }
 
         val agora = LocalTime.now()
+
         val atualMinutos =
             agora.hour * 60 + agora.minute
 
-        return if (inicioMinutos < terminoMinutos) {
-            atualMinutos >= inicioMinutos &&
-                atualMinutos < terminoMinutos
-        } else {
-            atualMinutos >= inicioMinutos ||
-                atualMinutos < terminoMinutos
-        }
+        val dentroDoHorario =
+            if (inicioMinutos < terminoMinutos) {
+                atualMinutos >= inicioMinutos &&
+                    atualMinutos < terminoMinutos
+            } else {
+                atualMinutos >= inicioMinutos ||
+                    atualMinutos < terminoMinutos
+            }
+
+        Log.d(
+            TAG,
+            "Horario atual=$atualMinutos, " +
+                "inicio=$inicioMinutos, " +
+                "termino=$terminoMinutos, " +
+                "dentro=$dentroDoHorario",
+        )
+
+        return dentroDoHorario
     }
 
     private fun responderChamada(
         callDetails: Call.Details,
         bloquear: Boolean,
     ) {
+        Log.d(
+            TAG,
+            "respondToCall bloquear=$bloquear",
+        )
+
         val resposta = CallResponse.Builder()
             .setDisallowCall(bloquear)
             .setRejectCall(bloquear)
