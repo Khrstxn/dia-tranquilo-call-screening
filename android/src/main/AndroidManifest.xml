@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
     <application>
+
         <service
             android:name="com.diatranquilo.callscreening.DiaTranquiloCallScreeningService"
             android:permission="android.permission.BIND_SCREENING_SERVICE"
@@ -11,6 +14,7 @@
             </intent-filter>
 
         </service>
+
     </application>
 
 </manifest>
