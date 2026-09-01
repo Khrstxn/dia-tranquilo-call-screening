@@ -3,6 +3,7 @@ package com.diatranquilo.callscreening
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.ContactsContract
 import android.telecom.Call
 import android.telecom.CallScreeningService
@@ -19,6 +20,9 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
         const val KEY_BLOQUEIO_DESCONHECIDOS_ATIVO =
             "bloqueioDesconhecidosAtivo"
 
+        const val KEY_BLOQUEIO_SPAM_ATIVO =
+            "bloqueioSpamAtivo"
+
         const val KEY_BLOQUEIO_HORARIO_ATIVO =
             "bloqueioHorarioAtivo"
 
@@ -27,6 +31,22 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
 
         const val KEY_TERMINO_MINUTOS =
             "terminoBloqueioMinutos"
+
+        /*
+         * Valores definidos pela API Android para
+         * callerNumberVerificationStatus.
+         *
+         * 0 = NOT_VERIFIED
+         * 1 = PASSED
+         * 2 = FAILED
+         *
+         * Evitamos referenciar diretamente as constantes de
+         * android.telecom.Connection porque elas só existem
+         * a partir da API 30, enquanto o Dia Tranquilo
+         * suporta Android API 29+.
+         */
+        private const val VERIFICATION_STATUS_NOT_VERIFIED = 0
+        private const val VERIFICATION_STATUS_FAILED = 2
     }
 
     override fun onScreenCall(callDetails: Call.Details) {
@@ -55,6 +75,12 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
                     false,
                 )
 
+            val bloqueioSpamAtivo =
+                prefs.getBoolean(
+                    KEY_BLOQUEIO_SPAM_ATIVO,
+                    false,
+                )
+
             val bloqueioHorarioAtivo =
                 prefs.getBoolean(
                     KEY_BLOQUEIO_HORARIO_ATIVO,
@@ -77,6 +103,7 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
                 TAG,
                 "Configuracao: " +
                     "desconhecidos=$bloqueioDesconhecidosAtivo, " +
+                    "spam=$bloqueioSpamAtivo, " +
                     "horario=$bloqueioHorarioAtivo, " +
                     "inicio=$inicioMinutos, " +
                     "termino=$terminoMinutos",
@@ -92,21 +119,32 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
             val estaNosContatos =
                 numeroEstaNosContatos(callDetails)
 
+            val statusVerificacao =
+                obterStatusVerificacao(callDetails)
+
+            val numeroSuspeito =
+                statusVerificacao ==
+                    VERIFICATION_STATUS_FAILED
+
             Log.d(
                 TAG,
                 "Analise: " +
                     "dentroDoHorario=$dentroDoHorarioBloqueado, " +
-                    "estaNosContatos=$estaNosContatos",
+                    "estaNosContatos=$estaNosContatos, " +
+                    "statusVerificacao=$statusVerificacao, " +
+                    "numeroSuspeito=$numeroSuspeito",
             )
 
             val deveBloquear =
-                if (dentroDoHorarioBloqueado) {
-                    true
-                } else if (bloqueioDesconhecidosAtivo) {
-                    !estaNosContatos
-                } else {
-                    false
-                }
+                dentroDoHorarioBloqueado ||
+                    (
+                        bloqueioDesconhecidosAtivo &&
+                            !estaNosContatos
+                    ) ||
+                    (
+                        bloqueioSpamAtivo &&
+                            numeroSuspeito
+                    )
 
             Log.d(
                 TAG,
@@ -129,6 +167,29 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
                 bloquear = false,
             )
         }
+    }
+
+    private fun obterStatusVerificacao(
+        callDetails: Call.Details,
+    ): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Log.d(
+                TAG,
+                "Verificacao de numero indisponivel nesta versao do Android.",
+            )
+
+            return VERIFICATION_STATUS_NOT_VERIFIED
+        }
+
+        val status =
+            callDetails.callerNumberVerificationStatus
+
+        Log.d(
+            TAG,
+            "Status de verificacao do numero=$status",
+        )
+
+        return status
     }
 
     private fun numeroEstaNosContatos(
