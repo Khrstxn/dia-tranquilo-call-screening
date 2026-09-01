@@ -11,6 +11,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
+import org.json.JSONArray
 
 class DiaTranquiloCallScreeningPlugin :
     FlutterPlugin,
@@ -114,6 +115,14 @@ class DiaTranquiloCallScreeningPlugin :
 
             "obterConfiguracaoBloqueioPorHorario" -> {
                 obterConfiguracaoBloqueioPorHorario(result)
+            }
+
+            /*
+             * Retorna para o Flutter as últimas
+             * chamadas registradas pelo Service.
+             */
+            "obterUltimosBloqueios" -> {
+                obterUltimosBloqueios(result)
             }
 
             else -> {
@@ -464,6 +473,109 @@ class DiaTranquiloCallScreeningPlugin :
         )
 
         result.success(configuracao)
+    }
+
+    /*
+     * Lê o histórico gravado pelo
+     * DiaTranquiloCallScreeningService.
+     *
+     * Retorna uma List<Map> compatível com
+     * o StandardMessageCodec do Flutter.
+     */
+    private fun obterUltimosBloqueios(
+        result: MethodChannel.Result,
+    ) {
+        val context = applicationContext
+
+        if (context == null) {
+            result.error(
+                "NO_CONTEXT",
+                "O contexto Android não está disponível.",
+                null,
+            )
+            return
+        }
+
+        try {
+            val prefs = context.getSharedPreferences(
+                DiaTranquiloCallScreeningService.PREFS_NAME,
+                Context.MODE_PRIVATE,
+            )
+
+            val historicoSalvo = prefs.getString(
+                DiaTranquiloCallScreeningService.KEY_ULTIMOS_BLOQUEIOS,
+                null,
+            )
+
+            /*
+             * Ainda não houve chamadas bloqueadas.
+             */
+            if (historicoSalvo.isNullOrBlank()) {
+                result.success(
+                    emptyList<Map<String, Any>>(),
+                )
+                return
+            }
+
+            val array = JSONArray(
+                historicoSalvo,
+            )
+
+            val registros =
+                mutableListOf<Map<String, Any>>()
+
+            for (indice in 0 until array.length()) {
+                val objeto =
+                    array.optJSONObject(indice)
+                        ?: continue
+
+                val numero =
+                    objeto.optString(
+                        "numero",
+                        "Numero indisponivel",
+                    )
+
+                val timestamp =
+                    objeto.optLong(
+                        "timestamp",
+                        0L,
+                    )
+
+                val motivo =
+                    objeto.optString(
+                        "motivo",
+                        "OUTRO",
+                    )
+
+                val registro =
+                    mapOf<String, Any>(
+                        "numero" to numero,
+                        "timestamp" to timestamp,
+                        "motivo" to motivo,
+                    )
+
+                registros.add(
+                    registro,
+                )
+            }
+
+            /*
+             * Proteção adicional:
+             * mesmo que o armazenamento contenha
+             * mais registros, enviamos no máximo três.
+             */
+            result.success(
+                registros.take(3),
+            )
+        } catch (exception: Exception) {
+            /*
+             * Um histórico inválido não deve
+             * causar falha no aplicativo.
+             */
+            result.success(
+                emptyList<Map<String, Any>>(),
+            )
+        }
     }
 
     override fun onActivityResult(
