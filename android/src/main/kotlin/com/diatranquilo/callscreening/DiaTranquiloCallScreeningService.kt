@@ -9,6 +9,8 @@ import android.telecom.Call
 import android.telecom.CallScreeningService
 import android.util.Log
 import java.time.LocalTime
+import org.json.JSONArray
+import org.json.JSONObject
 
 class DiaTranquiloCallScreeningService : CallScreeningService() {
 
@@ -32,6 +34,11 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
         const val KEY_TERMINO_MINUTOS =
             "terminoBloqueioMinutos"
 
+        const val KEY_ULTIMOS_BLOQUEIOS =
+            "ultimosBloqueiosJson"
+
+        private const val MAX_ULTIMOS_BLOQUEIOS = 3
+
         /*
          * Valores definidos pela API Android para
          * callerNumberVerificationStatus.
@@ -40,10 +47,9 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
          * 1 = PASSED
          * 2 = FAILED
          *
-         * Evitamos referenciar diretamente as constantes de
-         * android.telecom.Connection porque elas só existem
-         * a partir da API 30, enquanto o Dia Tranquilo
-         * suporta Android API 29+.
+         * Não referenciamos diretamente as constantes de
+         * android.telecom.Connection porque elas foram
+         * adicionadas somente na API 30.
          */
         private const val VERIFICATION_STATUS_NOT_VERIFIED = 0
         private const val VERIFICATION_STATUS_FAILED = 2
@@ -135,6 +141,11 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
                     "numeroSuspeito=$numeroSuspeito",
             )
 
+            /*
+             * REGRA DE BLOQUEIO ORIGINAL.
+             *
+             * O histórico NÃO participa desta decisão.
+             */
             val deveBloquear =
                 dentroDoHorarioBloqueado ||
                     (
@@ -151,10 +162,41 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
                 "Decisao final: bloquear=$deveBloquear",
             )
 
+            /*
+             * Primeiro respondemos à chamada.
+             *
+             * O histórico nunca deve atrasar ou alterar
+             * a decisão principal do CallScreeningService.
+             */
             responderChamada(
                 callDetails = callDetails,
                 bloquear = deveBloquear,
             )
+
+            /*
+             * Somente chamadas realmente bloqueadas
+             * entram no histórico.
+             */
+            if (deveBloquear) {
+                val motivo =
+                    determinarMotivoBloqueio(
+                        dentroDoHorarioBloqueado =
+                            dentroDoHorarioBloqueado,
+                        bloqueioSpamAtivo =
+                            bloqueioSpamAtivo,
+                        numeroSuspeito =
+                            numeroSuspeito,
+                        bloqueioDesconhecidosAtivo =
+                            bloqueioDesconhecidosAtivo,
+                        estaNosContatos =
+                            estaNosContatos,
+                    )
+
+                registrarBloqueio(
+                    callDetails = callDetails,
+                    motivo = motivo,
+                )
+            }
         } catch (exception: Exception) {
             Log.e(
                 TAG,
@@ -162,6 +204,12 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
                 exception,
             )
 
+            /*
+             * Fail-open:
+             * em uma falha inesperada da análise principal,
+             * permitimos a chamada em vez de bloquear
+             * indevidamente.
+             */
             responderChamada(
                 callDetails = callDetails,
                 bloquear = false,
@@ -227,9 +275,10 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
             return false
         }
 
-        val numero = handle.schemeSpecificPart
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+        val numero =
+            handle.schemeSpecificPart
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
 
         if (numero == null) {
             Log.d(
@@ -244,15 +293,18 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
             "Consultando contatos para numero=$numero",
         )
 
-        val lookupUri = Uri.withAppendedPath(
-            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-            Uri.encode(numero),
-        )
+        val lookupUri =
+            Uri.withAppendedPath(
+                ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                Uri.encode(numero),
+            )
 
         val encontrado =
             contentResolver.query(
                 lookupUri,
-                arrayOf(ContactsContract.PhoneLookup._ID),
+                arrayOf(
+                    ContactsContract.PhoneLookup._ID,
+                ),
                 null,
                 null,
                 null,
@@ -325,6 +377,222 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
         return dentroDoHorario
     }
 
+    /*
+     * Esta função escolhe apenas o MOTIVO mostrado
+     * no histórico.
+     *
+     * Ela NÃO decide se a chamada será bloqueada.
+     *
+     * Prioridade:
+     * 1 - Horário
+     * 2 - Spam/Fraude
+     * 3 - Desconhecido
+     */
+    private fun determinarMotivoBloqueio(
+        dentroDoHorarioBloqueado: Boolean,
+        bloqueioSpamAtivo: Boolean,
+        numeroSuspeito: Boolean,
+        bloqueioDesconhecidosAtivo: Boolean,
+        estaNosContatos: Boolean,
+    ): String {
+        return when {
+            dentroDoHorarioBloqueado ->
+                "HORARIO"
+
+            bloqueioSpamAtivo &&
+                numeroSuspeito ->
+                "SPAM_FRAUDE"
+
+            bloqueioDesconhecidosAtivo &&
+                !estaNosContatos ->
+                "DESCONHECIDO"
+
+            else ->
+                "OUTRO"
+        }
+    }
+
+    /*
+     * Salva uma chamada bloqueada.
+     *
+     * Apenas os três registros mais recentes
+     * são mantidos.
+     *
+     * Um erro nesta função NÃO afeta a chamada.
+     */
+    @Synchronized
+    private fun registrarBloqueio(
+        callDetails: Call.Details,
+        motivo: String,
+    ) {
+        try {
+            val numero =
+                obterNumeroParaHistorico(
+                    callDetails,
+                )
+
+            val prefs =
+                getSharedPreferences(
+                    PREFS_NAME,
+                    MODE_PRIVATE,
+                )
+
+            val historicoSalvo =
+                prefs.getString(
+                    KEY_ULTIMOS_BLOQUEIOS,
+                    null,
+                )
+
+            val registros =
+                mutableListOf<JSONObject>()
+
+            /*
+             * Recupera o histórico anterior,
+             * caso exista.
+             */
+            if (!historicoSalvo.isNullOrBlank()) {
+                try {
+                    val arrayAnterior =
+                        JSONArray(
+                            historicoSalvo,
+                        )
+
+                    for (
+                        indice in 0 until arrayAnterior.length()
+                    ) {
+                        val registro =
+                            arrayAnterior.optJSONObject(
+                                indice,
+                            )
+
+                        if (registro != null) {
+                            registros.add(
+                                registro,
+                            )
+                        }
+                    }
+                } catch (exception: Exception) {
+                    /*
+                     * Histórico inválido não deve afetar
+                     * chamadas futuras.
+                     *
+                     * Apenas descartamos os registros antigos.
+                     */
+                    Log.w(
+                        TAG,
+                        "Historico anterior invalido; iniciando novo historico.",
+                        exception,
+                    )
+
+                    registros.clear()
+                }
+            }
+
+            val novoRegistro =
+                JSONObject().apply {
+                    put(
+                        "numero",
+                        numero,
+                    )
+
+                    put(
+                        "timestamp",
+                        System.currentTimeMillis(),
+                    )
+
+                    put(
+                        "motivo",
+                        motivo,
+                    )
+                }
+
+            /*
+             * Registro mais recente sempre primeiro.
+             */
+            registros.add(
+                0,
+                novoRegistro,
+            )
+
+            val novoArray =
+                JSONArray()
+
+            /*
+             * Mantemos somente os três mais recentes.
+             */
+            registros
+                .take(
+                    MAX_ULTIMOS_BLOQUEIOS,
+                )
+                .forEach { registro ->
+                    novoArray.put(
+                        registro,
+                    )
+                }
+
+            /*
+             * apply() mantém a gravação fora do
+             * caminho síncrono da chamada.
+             */
+            prefs.edit()
+                .putString(
+                    KEY_ULTIMOS_BLOQUEIOS,
+                    novoArray.toString(),
+                )
+                .apply()
+
+            Log.d(
+                TAG,
+                "Bloqueio registrado no historico. " +
+                    "numero=$numero, " +
+                    "motivo=$motivo",
+            )
+        } catch (exception: Exception) {
+            Log.e(
+                TAG,
+                "Erro ao registrar historico de bloqueio.",
+                exception,
+            )
+        }
+    }
+
+    /*
+     * Obtém o número somente para o histórico.
+     *
+     * Esta função não participa da regra
+     * de bloqueio.
+     */
+    private fun obterNumeroParaHistorico(
+        callDetails: Call.Details,
+    ): String {
+        return try {
+            val handle =
+                callDetails.handle
+
+            if (
+                handle != null &&
+                handle.scheme == "tel"
+            ) {
+                handle.schemeSpecificPart
+                    ?.trim()
+                    ?.takeIf {
+                        it.isNotEmpty()
+                    }
+                    ?: "Numero indisponivel"
+            } else {
+                "Numero indisponivel"
+            }
+        } catch (exception: Exception) {
+            Log.w(
+                TAG,
+                "Nao foi possivel obter numero para historico.",
+                exception,
+            )
+
+            "Numero indisponivel"
+        }
+    }
+
     private fun responderChamada(
         callDetails: Call.Details,
         bloquear: Boolean,
@@ -334,10 +602,15 @@ class DiaTranquiloCallScreeningService : CallScreeningService() {
             "respondToCall bloquear=$bloquear",
         )
 
-        val resposta = CallResponse.Builder()
-            .setDisallowCall(bloquear)
-            .setRejectCall(bloquear)
-            .build()
+        val resposta =
+            CallResponse.Builder()
+                .setDisallowCall(
+                    bloquear,
+                )
+                .setRejectCall(
+                    bloquear,
+                )
+                .build()
 
         respondToCall(
             callDetails,
